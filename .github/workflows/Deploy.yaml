@@ -134,11 +134,16 @@ jobs:
             echo "Managing application process via PM2..."
             APP_NAME="app"
 
+            if ! command -v pm2 >/dev/null 2>&1; then
+              echo "⚠️ PM2 not found globally! Installing PM2 globally on VPS..."
+              npm install -g pm2 || true
+            fi
+
             if command -v pm2 >/dev/null 2>&1; then
               PM2_CMD="pm2"
             else
-              echo "⚠️ PM2 not found globally! Falling back to npx pm2..."
-              PM2_CMD="npx pm2"
+              echo "⚠️ PM2 still not in PATH, falling back to non-interactive npx -y pm2..."
+              PM2_CMD="npx -y pm2"
             fi
 
             if $PM2_CMD describe "$APP_NAME" >/dev/null 2>&1; then
