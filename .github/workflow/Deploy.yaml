@@ -1,24 +1,28 @@
-name : deploy on vps
-  on:
-    push:
+name: Deploy on VPS
+
+on:
+  push:
+    branches:
       - main
 
 jobs:
-  builds:
-    runs-ons: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
 
     steps:
-      - name:Checkout-code
-      uses:actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      -name:deploy via ssh
-      uses:appleboy:ssh-actions
-
-      with:
-        host:${{ secrets.SSH_host }}
-        username: ${{ secrets.SSH_User }}
-        keys: ${{ secrets.SSH_key }}
-
-        script: |
-          cd git action testing
-          
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }} # Typically 22
+          script: |
+            cd ./first/first
+            git pull origin main
+            npm install
+            npm run build --if-present
+            pm2 restart app || npm start &
