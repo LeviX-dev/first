@@ -1,0 +1,24 @@
+name : deploy on vps
+  on:
+    push:
+      - main
+
+jobs:
+  builds:
+    runs-ons: ubuntu-latest
+
+    steps:
+      - name:Checkout-code
+      uses:actions/checkout@v4
+
+      -name:deploy via ssh
+      uses:appleboy:ssh-actions
+
+      with:
+        host:${{ secrets.SSH_host }}
+        username: ${{ secrets.SSH_User }}
+        keys: ${{ secrets.SSH_key }}
+
+        script: |
+          cd git action testing
+          
