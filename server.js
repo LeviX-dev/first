@@ -44,11 +44,24 @@ const limiter = rateLimit({
   message: { status: 429, message: 'Too many requests from this IP, please try again later.' }
 });
 app.use('/api/', limiter);
-app.use('/api/test',(req,res)=>{
-    res.send({
-        msg:"millgaya response 2"
-    })
-})
+
+// Exact route matching for /api/test
+app.get('/api/test', (req, res) => {
+  res.send({
+    msg: "millgaya response 2"
+  });
+});
+
+// Endpoint to deliberately crash the server for PM2 auto-restart testing (supports GET and POST)
+app.all('/api/test/shutdown', (req, res) => {
+  res.status(200).send({ msg: "Server is shutting down for testing..." });
+  
+  // Allow the response to send before terminating the process
+  setTimeout(() => {
+    console.log("[TEST] Forced shutdown triggered by tester.");
+    process.exit(1); // Exits with failure code to trigger PM2 autorestart
+  }, 500);
+});
 
 // 4. CORE API ROUTES & HEALTH CHECKS
 // Crucial for Docker / VPS orchestration health monitoring
