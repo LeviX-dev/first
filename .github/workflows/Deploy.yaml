@@ -100,14 +100,16 @@ jobs:
             echo "NPM version:  $(npm -v 2>/dev/null || echo 'NPM not found in default path')"
 
             # 2. Locate and enter application repository directory
-            APP_DIR="./first/first"
-            if [ ! -d "$APP_DIR" ]; then
-              echo "Directory $APP_DIR does not exist. Checking alternative paths..."
-              if [ -d "$HOME/first/first" ]; then
-                APP_DIR="$HOME/first/first"
-              elif [ -d "$HOME/first" ]; then
-                APP_DIR="$HOME/first"
+            APP_DIR=""
+            for dir in "$HOME/first" "$PWD" "./first" "$HOME/first/first" "./first/first"; do
+              if [ -f "$dir/server.js" ] && [ -d "$dir/.git" ]; then
+                APP_DIR="$dir"
+                break
               fi
+            done
+
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="./first"
             fi
 
             echo "Navigating to app directory: $APP_DIR"
@@ -134,34 +136,20 @@ jobs:
             echo "Managing application process via PM2..."
             APP_NAME="app"
 
-            if ! command -v pm2 >/dev/null 2>&1; then
-              echo "⚠️ PM2 not found globally! Installing PM2 globally on VPS..."
-              npm install -g pm2 || true
-            fi
-
-            if command -v pm2 >/dev/null 2>&1; then
-              PM2_CMD="pm2"
+            if pm2 reload "$APP_NAME" --update-env 2>/dev/null || pm2 reload ecosystem.config.cjs --env production 2>/dev/null; then
+              echo "✅ Process $APP_NAME successfully reloaded with zero downtime."
             else
-              echo "⚠️ PM2 still not in PATH, falling back to non-interactive npx -y pm2..."
-              PM2_CMD="npx -y pm2"
-            fi
-
-            if $PM2_CMD describe "$APP_NAME" >/dev/null 2>&1; then
-              echo "Process $APP_NAME exists. Performing zero-downtime reload..."
-              $PM2_CMD reload "$APP_NAME" --update-env || $PM2_CMD restart "$APP_NAME" --update-env
-            else
-              echo "Process $APP_NAME does not exist. Checking for lingering processes on port 3000..."
+              echo "Process not running under PM2. Starting new instance..."
               if command -v fuser >/dev/null 2>&1; then
                 fuser -k 3000/tcp 2>/dev/null || true
               fi
-              echo "Starting new instance for $APP_NAME..."
               if [ -f "ecosystem.config.cjs" ]; then
-                $PM2_CMD start ecosystem.config.cjs --env production
+                pm2 start ecosystem.config.cjs --env production
               else
-                $PM2_CMD start server.js --name "$APP_NAME" --time
+                pm2 start server.js --name "$APP_NAME" --time
               fi
             fi
-            $PM2_CMD save || true
+            pm2 save || true
 
             # 7. Automated Health Check Verification
             echo "================================================="
@@ -189,7 +177,7 @@ jobs:
             if [ $SUCCESS -eq 0 ]; then
               echo "❌ ERROR: Health check failed after $MAX_RETRIES attempts!"
               echo "Fetching last 30 lines of process logs..."
-              $PM2_CMD logs "$APP_NAME" --lines 30 --nostream || true
+              pm2 logs "$APP_NAME" --lines 30 --nostream || true
               exit 1
             fi
 
