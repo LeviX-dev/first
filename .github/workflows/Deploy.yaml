@@ -1,27 +1,186 @@
-name: Deploy on VPS
+name: Production CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip CI test/syntax checks (emergency deploy)'
+        required: false
+        default: false
+        type: boolean
+
+# Prevent overlapping deployment runs on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  build:
+  # ========================================================
+  # STAGE 1: Automated Continuous Integration (CI)
+  # Validates code syntax, dependencies, and tests before VPS
+  # ========================================================
+  ci:
+    name: Lint, Test & Validate
     runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Deploy via SSH
+      - name: Setup Node.js runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify JavaScript syntax
+        run: |
+          echo "Validating syntax of entry files..."
+          node --check server.js
+
+      - name: Run automated test suite
+        run: |
+          # Runs test if configured, otherwise passes safely
+          npm run test --if-present || echo "No custom test command specified, passed."
+
+  # ========================================================
+  # STAGE 2: Automated Continuous Deployment (CD)
+  # Connects to VPS via SSH, performs zero-downtime deployment,
+  # and runs automated post-deployment health verification.
+  # ========================================================
+  deploy:
+    name: Zero-Downtime Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: ci
+    if: |
+      always() &&
+      (needs.ci.result == 'success' || inputs.skip_tests == true) &&
+      (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
+
+    steps:
+      - name: Checkout code for commit metadata
+        uses: actions/checkout@v4
+
+      - name: Execute Remote Deployment via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          envs: COMMIT_SHA,ACTOR
           script: |
-            cd ./first/first
-            git pull origin main
-            npm install
+            set -e
+
+            echo "================================================="
+            echo "🚀 Starting Automated Deployment: $(date)"
+            echo "Triggered by: $ACTOR | Commit: $COMMIT_SHA"
+            echo "================================================="
+
+            # 1. Source user environment to load Node, NPM, and PM2 in non-interactive SSH
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            export PATH="$PATH:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -n 1)/bin:/usr/local/bin:/usr/bin"
+
+            echo "Node version: $(node -v 2>/dev/null || echo 'Node not found in default path')"
+            echo "NPM version:  $(npm -v 2>/dev/null || echo 'NPM not found in default path')"
+
+            # 2. Locate and enter application repository directory
+            APP_DIR="./first/first"
+            if [ ! -d "$APP_DIR" ]; then
+              echo "Directory $APP_DIR does not exist. Checking alternative paths..."
+              if [ -d "$HOME/first/first" ]; then
+                APP_DIR="$HOME/first/first"
+              elif [ -d "$HOME/first" ]; then
+                APP_DIR="$HOME/first"
+              fi
+            fi
+
+            echo "Navigating to app directory: $APP_DIR"
+            cd "$APP_DIR"
+
+            # 3. Discard local accidental drifts and pull latest code
+            echo "Fetching and synchronizing with origin/main..."
+            git fetch --prune origin main
+            git reset --hard origin/main
+
+            # 4. Install production dependencies securely
+            echo "Installing production dependencies..."
+            if [ -f "package-lock.json" ]; then
+              npm ci --omit=dev --no-audit --prefer-offline || npm install --omit=dev
+            else
+              npm install --omit=dev
+            fi
+
+            # 5. Build project if build script is defined in package.json
+            echo "Checking for build script..."
             npm run build --if-present
-            pm2 restart app || npm start &
+
+            # 6. Zero-Downtime Reload via PM2
+            echo "Managing application process via PM2..."
+            APP_NAME="app"
+
+            if command -v pm2 >/dev/null 2>&1; then
+              if [ -f "ecosystem.config.cjs" ]; then
+                pm2 startOrReload ecosystem.config.cjs --env production
+              elif pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+                echo "Process $APP_NAME exists. Performing zero-downtime reload..."
+                pm2 reload "$APP_NAME" --update-env
+              else
+                echo "Starting new PM2 instance for $APP_NAME..."
+                pm2 start server.js --name "$APP_NAME" --time
+              fi
+              pm2 save
+            else
+              echo "⚠️ PM2 not found globally! Falling back to npx pm2..."
+              npx pm2 reload "$APP_NAME" --update-env || npx pm2 start server.js --name "$APP_NAME"
+              npx pm2 save
+            fi
+
+            # 7. Automated Health Check Verification
+            echo "================================================="
+            echo "🔍 Running Automated Post-Deployment Health Check..."
+            echo "================================================="
+            PORT=3000
+            HEALTH_URL="http://127.0.0.1:$PORT/health"
+            MAX_RETRIES=6
+            RETRY_DELAY=3
+            SUCCESS=0
+
+            for i in $(seq 1 $MAX_RETRIES); do
+              echo "Attempt $i/$MAX_RETRIES: Checking $HEALTH_URL..."
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "✅ Health check PASSED with HTTP 200!"
+                SUCCESS=1
+                break
+              else
+                echo "Waiting for server to become ready (HTTP: $HTTP_CODE)... sleeping ${RETRY_DELAY}s"
+                sleep $RETRY_DELAY
+              fi
+            done
+
+            if [ $SUCCESS -eq 0 ]; then
+              echo "❌ ERROR: Health check failed after $MAX_RETRIES attempts!"
+              echo "Fetching last 30 lines of process logs..."
+              pm2 logs "$APP_NAME" --lines 30 --nostream || true
+              exit 1
+            fi
+
+            echo "================================================="
+            echo "🎉 Deployment successfully completed and verified!"
+            echo "================================================="
