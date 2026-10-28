@@ -46,7 +46,7 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 app.use('/api/test',(req,res)=>{
     res.send({
-        msg:"millgaya response"
+        msg:"millgaya response 2"
     })
 })
 
