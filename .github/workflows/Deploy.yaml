@@ -135,21 +135,24 @@ jobs:
             APP_NAME="app"
 
             if command -v pm2 >/dev/null 2>&1; then
-              if [ -f "ecosystem.config.cjs" ]; then
-                pm2 startOrReload ecosystem.config.cjs --env production
-              elif pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-                echo "Process $APP_NAME exists. Performing zero-downtime reload..."
-                pm2 reload "$APP_NAME" --update-env
-              else
-                echo "Starting new PM2 instance for $APP_NAME..."
-                pm2 start server.js --name "$APP_NAME" --time
-              fi
-              pm2 save
+              PM2_CMD="pm2"
             else
               echo "⚠️ PM2 not found globally! Falling back to npx pm2..."
-              npx pm2 reload "$APP_NAME" --update-env || npx pm2 start server.js --name "$APP_NAME"
-              npx pm2 save
+              PM2_CMD="npx pm2"
             fi
+
+            if $PM2_CMD describe "$APP_NAME" >/dev/null 2>&1; then
+              echo "Process $APP_NAME exists. Performing zero-downtime reload..."
+              $PM2_CMD reload "$APP_NAME" --update-env || $PM2_CMD restart "$APP_NAME" --update-env
+            else
+              echo "Starting new instance for $APP_NAME..."
+              if [ -f "ecosystem.config.cjs" ]; then
+                $PM2_CMD start ecosystem.config.cjs --env production
+              else
+                $PM2_CMD start server.js --name "$APP_NAME" --time
+              fi
+            fi
+            $PM2_CMD save || true
 
             # 7. Automated Health Check Verification
             echo "================================================="
@@ -177,7 +180,7 @@ jobs:
             if [ $SUCCESS -eq 0 ]; then
               echo "❌ ERROR: Health check failed after $MAX_RETRIES attempts!"
               echo "Fetching last 30 lines of process logs..."
-              pm2 logs "$APP_NAME" --lines 30 --nostream || true
+              $PM2_CMD logs "$APP_NAME" --lines 30 --nostream || true
               exit 1
             fi
 

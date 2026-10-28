@@ -3,8 +3,8 @@ module.exports = {
     {
       name: 'app',
       script: './server.js',
-      instances: 'max',
-      exec_mode: 'cluster',
+      exec_mode: 'fork',
+      instances: 1,
       autorestart: true,
       watch: false,
       max_memory_restart: '500M',
