@@ -145,6 +145,10 @@ jobs:
               echo "Process $APP_NAME exists. Performing zero-downtime reload..."
               $PM2_CMD reload "$APP_NAME" --update-env || $PM2_CMD restart "$APP_NAME" --update-env
             else
+              echo "Process $APP_NAME does not exist. Checking for lingering processes on port 3000..."
+              if command -v fuser >/dev/null 2>&1; then
+                fuser -k 3000/tcp 2>/dev/null || true
+              fi
               echo "Starting new instance for $APP_NAME..."
               if [ -f "ecosystem.config.cjs" ]; then
                 $PM2_CMD start ecosystem.config.cjs --env production

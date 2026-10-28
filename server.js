@@ -85,6 +85,15 @@ const server = app.listen(PORT, () => {
   console.log(`[INFO] Server aggressively running in ${NODE_ENV} mode on port ${PORT}`);
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[CRITICAL] Port ${PORT} is already in use by another process!`);
+  } else {
+    console.error(`[CRITICAL] Server startup error:`, err);
+  }
+  process.exit(1);
+});
+
 const gracefulShutdown = (signal) => {
   console.log(`[INFO] Received ${signal}. Starting graceful shutdown sequence...`);
   
